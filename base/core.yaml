@@ -607,7 +607,7 @@ light:
     pin: ${led_pin}
     num_leds: ${led_num}
     chipset: WS2812
-    rgb_order: RGB
+    channel_colors: RGB
     default_transition_length: 150ms
     effects:
       # update_interval must be LONGER than transition_length: it is how often
