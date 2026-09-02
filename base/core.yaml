@@ -69,7 +69,7 @@ substitutions:
   # One-shot "ready" chime played once the device connects to HA. Ships with the
   # repo (16 kHz mono, a few KB). Override with any URL or local file in your thin
   # config; the media player decodes MP3/FLAC/WAV.
-  boot_sound_file: https://github.com/MichalZaniewicz/esphome-waveshare-esp32-s3-audio-va/raw/main/base/sounds/startup.mp3
+  boot_sound_file: https://github.com/Twilight-Networks/esphome-waveshare-esp32-s3-audio-va/raw/main/base/sounds/startup.mp3
 
 esphome:
   name: ${name}
