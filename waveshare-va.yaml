@@ -43,8 +43,8 @@ substitutions:
 
 packages:
   core:
-    url: https://github.com/MichalZaniewicz/esphome-waveshare-esp32-s3-audio-va
-    ref: v1.0.0     # pinned release; bump to a newer tag, or use 'main' to track latest
+    url: https://github.com/Twilight-Networks/esphome-waveshare-esp32-s3-audio-va
+    ref: feature/twilight-customizations     # pinned release; bump to a newer tag, or use 'main' to track latest
     files:
       - base/core.yaml
     refresh: 1d      # re-check the ref daily (a pinned tag never moves anyway)
