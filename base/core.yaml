@@ -600,15 +600,72 @@ voice_assistant:
         }
         // The ring is repainted centrally by control_leds().
 
+# ---------------------------------------------------------------------------
+# Logical Home Assistant status-ring state.
+#
+# These outputs intentionally drive no hardware. They only allow us to expose
+# a normal RGB light to Home Assistant whose desired state remains untouched
+# while firmware overlays (voice, timer, errors, etc.) use the physical ring.
+# ---------------------------------------------------------------------------
+output:
+  - platform: template
+    id: status_ring_base_red
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+
+  - platform: template
+    id: status_ring_base_green
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+
+  - platform: template
+    id: status_ring_base_blue
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+
 light:
-  - platform: esp32_rmt_led_strip
+  # -------------------------------------------------------------------------
+  # BASE LAYER
+  #
+  # This is the entity exposed to Home Assistant.
+  # It represents the DESIRED persistent ring state, but never drives the
+  # WS2812 hardware directly.
+  # -------------------------------------------------------------------------
+  - platform: rgb
     id: status_ring
     name: "Status Ring"
+    red: status_ring_base_red
+    green: status_ring_base_green
+    blue: status_ring_base_blue
+    default_transition_length: 0s
+    restore_mode: ALWAYS_OFF
+    on_state:
+      - if:
+          condition:
+            lambda: 'return !id(init_in_progress);'
+          then:
+            - script.execute: control_leds
+  # -------------------------------------------------------------------------
+  # HARDWARE LAYER
+  #
+  # The real WS2812 ring. Internal only. All firmware overlays are rendered
+  # here; Home Assistant never controls this light directly.
+  # -------------------------------------------------------------------------
+  - platform: esp32_rmt_led_strip
+    id: status_ring_hw
+    internal: true
     pin: ${led_pin}
     num_leds: ${led_num}
     chipset: WS2812
     channel_colors: RGB
     default_transition_length: 150ms
+    restore_mode: ALWAYS_OFF
     effects:
       # update_interval must be LONGER than transition_length: it is how often
       # the pulse flips its brightness target (min<->max), not a frame rate. A
@@ -767,13 +824,15 @@ globals:
 script:
   - id: flash_ring
     then:
-      - light.turn_on: { id: status_ring, red: 1.0, green: 0.0, blue: 0.0, brightness: 100%, effect: "None" }
+      - light.turn_on: { id: status_ring_hw, red: 1.0, green: 0.0, blue: 0.0, brightness: 100%, effect: "None" }
       - delay: 250ms
       # Return to the real state instead of going dark (e.g. if a timer is
       # counting or the VA is active while the mic is muted/unmuted).
       - script.execute: control_leds
 
-  # Minimal LED dispatcher: off / solid / a named built-in effect.
+  # Minimal LED hardware dispatcher: off / solid / a named built-in effect.
+  # IMPORTANT: This only paints status_ring_hw. It never changes the
+  # Home Assistant base-state entity status_ring.
   - id: led_set_effect
     mode: restart
     parameters:
@@ -788,26 +847,27 @@ script:
           id(led_ring_color_b) = b;
           ESP_LOGI("led", "led_set_effect: effect='%s' rgb(%.2f, %.2f, %.2f) brightness=%.2f",
                    effect.c_str(), r, g, b, (float) id(led_ring_brightness).state);
+
       - if:
           condition:
             lambda: 'return effect == "off";'
           then:
-            - light.turn_off: status_ring
+            - light.turn_off: status_ring_hw
           else:
             - if:
                 condition:
                   lambda: 'return effect == "solid";'
                 then:
                   - light.turn_on:
-                      id: status_ring
-                      effect: "None"    # clear any running effect so solid is steady
+                      id: status_ring_hw
+                      effect: "None"
                       brightness: !lambda 'return id(led_ring_brightness).state;'
                       red: !lambda 'return id(led_ring_color_r);'
                       green: !lambda 'return id(led_ring_color_g);'
                       blue: !lambda 'return id(led_ring_color_b);'
                 else:
                   - light.turn_on:
-                      id: status_ring
+                      id: status_ring_hw
                       brightness: !lambda 'return id(led_ring_brightness).state;'
                       red: !lambda 'return id(led_ring_color_r);'
                       green: !lambda 'return id(led_ring_color_g);'
@@ -884,14 +944,55 @@ script:
             return;
           }
 
-          set("off", 0, 0, 0);                       // idle
+          // -----------------------------------------------------------------
+          // No firmware overlay is active.
+          // Render the CURRENT Home Assistant base-state onto the hardware.
+          //
+          // status_ring     = logical desired state from HA / Node-RED
+          // status_ring_hw  = actual WS2812 output
+          // -----------------------------------------------------------------
+          const auto &base = id(status_ring).remote_values;
+
+          if (!base.is_on()) {
+            id(led_set_effect).execute("off", 0.0f, 0.0f, 0.0f);
+            return;
+          }
+
+          ESP_LOGD(
+            "led",
+            "Rendering base ring: brightness=%.2f color_brightness=%.2f rgb(%.2f, %.2f, %.2f)",
+            base.get_brightness(),
+            base.get_color_brightness(),
+            base.get_red(),
+            base.get_green(),
+            base.get_blue()
+          );
+
+          auto call = id(status_ring_hw).turn_on();
+
+          // Stop any previous Voice/Timer/etc. animation.
+          call.set_effect("None");
+
+          // status_ring brightness is the requested HA brightness.
+          // led_ring_brightness remains the global/master brightness.
+          call.set_brightness(
+            base.get_brightness() * id(led_ring_brightness).state
+          );
+
+          call.set_color_brightness(base.get_color_brightness());
+          call.set_red(base.get_red());
+          call.set_green(base.get_green());
+          call.set_blue(base.get_blue());
+
+          call.perform();
+          return;
 
   # A short green pulse on a volume change, then back to the state machine.
   - id: control_leds_volume_changed
     mode: restart
     then:
       - light.turn_on:
-          id: status_ring
+          id: status_ring_hw
           brightness: !lambda 'return id(led_ring_brightness).state;'
           red: 0.0
           green: 1.0
@@ -1308,11 +1409,9 @@ number:
     on_value:
       - if:
           condition:
-            light.is_on: status_ring
+            lambda: 'return !id(init_in_progress);'
           then:
-            - light.turn_on:
-                id: status_ring
-                brightness: !lambda 'return x;'
+            - script.execute: control_leds
 
 sensor:
   - platform: template
