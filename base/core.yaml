@@ -859,16 +859,16 @@ script:
 
           switch (phase) {
             case ${voice_assist_waiting_for_command_phase_id}:
-              set("solid", 0.5, 0.0, 0.5);           // calm violet: I'm awake
+              set("solid", 0.0, 0.0, 1.0);
               return;
             case ${voice_assist_listening_for_command_phase_id}:
-              set(id(listening_effect).current_option(), 0.8, 0.0, 0.8);
+              set(id(listening_effect).current_option(), 0.0, 0.0, 1.0);
               return;
             case ${voice_assist_thinking_phase_id}:
-              set(id(thinking_effect).current_option(), 0.6, 0.0, 0.6);
+              set(id(thinking_effect).current_option(), 0.0, 0.0, 1.0);
               return;
             case ${voice_assist_replying_phase_id}:
-              set(id(replying_effect).current_option(), 0.6, 0.0, 0.6);
+              set(id(replying_effect).current_option(), 0.0, 0.0, 1.0);
               return;
             case ${voice_assist_error_phase_id}:
               set("Pulse Fast", 1.0, 0.0, 0.0);
@@ -1125,7 +1125,7 @@ select:
     entity_category: config
     optimistic: true
     restore_value: true
-    initial_option: "Wipe"
+    initial_option: "Spinner"
     options: *va_ring_effects
     on_value: *repaint_if_ready
 
