@@ -1528,16 +1528,26 @@ button:
 
 binary_sensor:
   - platform: gpio
+    id: volume_down_button
     name: "Volume Down"
+    use_interrupt: false
     pin:
       tca9555: ioexp
       number: ${key1_exio}
       inverted: true
     on_press:
       - media_player.volume_down: external_media_player
+      - delay: 400ms
+      - while:
+          condition:
+            binary_sensor.is_on: volume_down_button
+          then:
+            - media_player.volume_down: external_media_player
+            - delay: 150ms
 
   - platform: gpio
     name: "Play Pause"
+    use_interrupt: false
     pin:
       tca9555: ioexp
       number: ${key2_exio}
@@ -1546,10 +1556,19 @@ binary_sensor:
       - media_player.toggle: external_media_player
 
   - platform: gpio
+    id: volume_up_button
     name: "Volume Up"
+    use_interrupt: false
     pin:
       tca9555: ioexp
       number: ${key3_exio}
       inverted: true
     on_press:
       - media_player.volume_up: external_media_player
+      - delay: 400ms
+      - while:
+          condition:
+            binary_sensor.is_on: volume_up_button
+          then:
+            - media_player.volume_up: external_media_player
+            - delay: 150ms
