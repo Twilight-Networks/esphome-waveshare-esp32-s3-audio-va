@@ -1528,7 +1528,7 @@ button:
 
 binary_sensor:
   - platform: gpio
-    name: "Key1"
+    name: "Volume Down"
     pin:
       tca9555: ioexp
       number: ${key1_exio}
@@ -1537,7 +1537,7 @@ binary_sensor:
       - media_player.volume_down: external_media_player
 
   - platform: gpio
-    name: "Key2"
+    name: "Play Pause"
     pin:
       tca9555: ioexp
       number: ${key2_exio}
@@ -1546,7 +1546,7 @@ binary_sensor:
       - media_player.toggle: external_media_player
 
   - platform: gpio
-    name: "Key3"
+    name: "Volume Up"
     pin:
       tca9555: ioexp
       number: ${key3_exio}
