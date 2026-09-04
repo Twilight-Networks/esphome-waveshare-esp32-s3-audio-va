@@ -364,11 +364,20 @@ media_player:
                 decibel_reduction: 0
                 duration: 1.0s
     on_mute:
-      - delay: 100ms            # debounce
-      - script.execute: control_leds_volume_changed
+      if:
+        condition:
+          - lambda: return !id(init_in_progress);
+        then:
+          - delay: 100ms
+          - script.execute: control_leds_volume_changed
+
     on_unmute:
-      - delay: 100ms
-      - script.execute: control_leds_volume_changed
+      if:
+        condition:
+          - lambda: return !id(init_in_progress);
+        then:
+          - delay: 100ms
+          - script.execute: control_leds_volume_changed
     on_volume:
       if:
         condition:
@@ -798,6 +807,23 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+
+  # Currently active manual LED feedback:
+  #   0 = none
+  #   1 = media volume/mute feedback, green, 1.2 seconds
+  #   2 = microphone mute/unmute feedback, red, 250 ms
+  - id: manual_ring_feedback_type
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Prevents control_leds from restarting an already visible manual effect
+  # when another state changes in the background.
+  - id: manual_ring_feedback_rendered
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
   - id: voice_assistant_phase
     type: int
     restore_value: no
@@ -822,13 +848,41 @@ globals:
     restore_value: no
 
 script:
-  - id: flash_ring
+  # Shared controller for short, manually triggered LED feedback.
+  #
+  # mode: restart gives the most recently triggered manual action priority:
+  # a new volume/mute action stops the previous feedback timer, replaces its
+  # colour, and starts its own duration from zero.
+  - id: show_manual_ring_feedback
+    mode: restart
+    parameters:
+      feedback_type: int
+      duration_ms: int
     then:
-      - light.turn_on: { id: status_ring_hw, red: 1.0, green: 0.0, blue: 0.0, brightness: 100%, effect: "None" }
-      - delay: 250ms
-      # Return to the real state instead of going dark (e.g. if a timer is
-      # counting or the VA is active while the mic is muted/unmuted).
+      - lambda: |-
+          id(manual_ring_feedback_type) = feedback_type;
+          id(manual_ring_feedback_rendered) = false;
+
+      # control_leds is the only place that renders the feedback.
       - script.execute: control_leds
+
+      # This delay is cooperative. The rest of the device keeps running.
+      - delay: !lambda return duration_ms;
+
+      - lambda: |-
+          id(manual_ring_feedback_type) = 0;
+          id(manual_ring_feedback_rendered) = false;
+
+      # Re-evaluate every current state after the feedback has expired.
+      - script.execute: control_leds
+
+  # Brief red acknowledgement for microphone mute and unmute.
+  - id: flash_mic_mute_ring
+    then:
+      - script.execute:
+          id: show_manual_ring_feedback
+          feedback_type: 2
+          duration_ms: 250
 
   # Minimal LED hardware dispatcher: off / solid / a named built-in effect.
   # IMPORTANT: This only paints status_ring_hw. It never changes the
@@ -898,6 +952,32 @@ script:
           auto set = [&](const std::string &effect, float r, float g, float b) {
             id(led_set_effect).execute(effect, r, g, b);
           };
+
+          // Manual feedback has the highest display priority. All underlying
+          // states continue changing, but none may repaint status_ring_hw
+          // until this feedback expires or another manual action replaces it.
+          if (id(manual_ring_feedback_type) != 0) {
+            if (!id(manual_ring_feedback_rendered)) {
+              id(manual_ring_feedback_rendered) = true;
+
+              if (id(manual_ring_feedback_type) == 1) {
+                // Media volume, mute and unmute: green pulse at master brightness.
+                set("Pulse Fast", 0.0f, 1.0f, 0.0f);
+              } else if (id(manual_ring_feedback_type) == 2) {
+                // Microphone mute/unmute: preserve the existing solid red
+                // acknowledgement at 100% brightness.
+                auto call = id(status_ring_hw).turn_on();
+                call.set_effect("None");
+                call.set_brightness(1.0f);
+                call.set_color_brightness(1.0f);
+                call.set_red(1.0f);
+                call.set_green(0.0f);
+                call.set_blue(0.0f);
+                call.perform();
+              }
+            }
+            return;
+          }
 
           if (improv_ble) {                          // BLE provisioning
             set("Pulse Medium", 1.0, 0.89, 0.71);    // warm white
@@ -987,19 +1067,13 @@ script:
           call.perform();
           return;
 
-  # A short green pulse on a volume change, then back to the state machine.
+  # A green acknowledgement for media volume, mute and unmute.
   - id: control_leds_volume_changed
-    mode: restart
     then:
-      - light.turn_on:
-          id: status_ring_hw
-          brightness: !lambda 'return id(led_ring_brightness).state;'
-          red: 0.0
-          green: 1.0
-          blue: 0.0
-          effect: "Pulse Fast"
-      - delay: 1.2s
-      - script.execute: control_leds
+      - script.execute:
+          id: show_manual_ring_feedback
+          feedback_type: 1
+          duration_ms: 1200
 
   - id: ring_timer
     then:
@@ -1312,11 +1386,11 @@ switch:
     turn_on_action:
       - lambda: id(mic_is_muted) = true;
       - microphone.mute: i2s_mics
-      - script.execute: flash_ring
+      - script.execute: flash_mic_mute_ring
     turn_off_action:
       - lambda: id(mic_is_muted) = false;
       - microphone.unmute: i2s_mics
-      - script.execute: flash_ring
+      - script.execute: flash_mic_mute_ring
 
   - platform: template
     id: wake_sound
