@@ -345,9 +345,11 @@ media_player:
       # is no per-sound clicking - only the boot window is silent.
       - if:
           condition:
-            or:
-              - media_player.is_announcing:
-              - lambda: 'return id(external_media_player)->state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING;'
+            and:
+              - switch.is_off: do_not_disturb
+              - or:
+                  - media_player.is_announcing:
+                  - lambda: 'return id(external_media_player)->state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING;'
           then:
             - switch.turn_on: amp_enable
       - if:
@@ -437,7 +439,9 @@ micro_wake_word:
                           else:
                             - if:
                                 condition:
-                                  switch.is_on: wake_sound
+                                  and:
+                                    - switch.is_on: wake_sound
+                                    - switch.is_off: do_not_disturb
                                 then:
                                   - script.execute:
                                       id: play_sound
@@ -812,6 +816,8 @@ globals:
   #   0 = none
   #   1 = media volume/mute feedback, green, 1.2 seconds
   #   2 = microphone mute/unmute feedback, red, 250 ms
+  #   3 = DND enabled: red fades to off
+  #   4 = DND disabled: red fades in
   - id: manual_ring_feedback_type
     type: int
     restore_value: no
@@ -820,6 +826,11 @@ globals:
   # Prevents control_leds from restarting an already visible manual effect
   # when another state changes in the background.
   - id: manual_ring_feedback_rendered
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: play_pause_long_press_handled
     type: bool
     restore_value: no
     initial_value: 'false'
@@ -883,6 +894,56 @@ script:
           id: show_manual_ring_feedback
           feedback_type: 2
           duration_ms: 250
+
+  # Toggle Do Not Disturb from the physical Play/Pause button.
+  #
+  # The manual feedback type is set BEFORE changing the switch so
+  # control_leds can render the acknowledgement without briefly
+  # exposing the normal ring state.
+  - id: toggle_dnd_from_button
+    mode: restart
+    then:
+      # Cancel any still-running volume/mic acknowledgement so it
+      # cannot clear the DND feedback state a moment later.
+      - script.stop: show_manual_ring_feedback
+
+      - if:
+          condition:
+            switch.is_off: do_not_disturb
+
+          then:
+            # DND will be enabled:
+            # red -> fade to dark.
+            - lambda: |-
+                id(manual_ring_feedback_type) = 3;
+                id(manual_ring_feedback_rendered) = false;
+
+            - switch.turn_on: do_not_disturb
+
+          else:
+            # DND will be disabled:
+            # dark -> fade up to red.
+            - lambda: |-
+                id(manual_ring_feedback_type) = 4;
+                id(manual_ring_feedback_rendered) = false;
+
+            - switch.turn_off: do_not_disturb
+
+      # Safety: make sure the current acknowledgement is rendered.
+      - script.execute: control_leds
+
+      # 600 ms transition + a short visible endpoint.
+      - delay: 700ms
+
+      # Release the temporary hardware override.
+      - lambda: |-
+          id(manual_ring_feedback_type) = 0;
+          id(manual_ring_feedback_rendered) = false;
+
+      # Restore the actual current state.
+      # If DND is ON -> ring remains dark.
+      # If DND is OFF -> normal HA/voice/timer state returns.
+      - script.execute: control_leds
 
   # Minimal LED hardware dispatcher: off / solid / a named built-in effect.
   # IMPORTANT: This only paints status_ring_hw. It never changes the
@@ -953,20 +1014,51 @@ script:
             id(led_set_effect).execute(effect, r, g, b);
           };
 
-          // Manual feedback has the highest display priority. All underlying
-          // states continue changing, but none may repaint status_ring_hw
-          // until this feedback expires or another manual action replaces it.
+          // Manual feedback has the highest display priority.
+          // All underlying states continue changing, but none may repaint
+          // status_ring_hw until this feedback expires.
           if (id(manual_ring_feedback_type) != 0) {
+
+            const int feedback =
+                id(manual_ring_feedback_type);
+
+            const bool dnd_feedback =
+                feedback == 3 ||
+                feedback == 4;
+
+            // While DND is active, normal manual feedback such as
+            // volume or microphone feedback must remain invisible.
+            // Only the explicit DND acknowledgement may be rendered.
+            if (
+                id(do_not_disturb).state &&
+                !dnd_feedback
+            ) {
+              set("off", 0.0f, 0.0f, 0.0f);
+              return;
+            }
+
             if (!id(manual_ring_feedback_rendered)) {
+
               id(manual_ring_feedback_rendered) = true;
 
-              if (id(manual_ring_feedback_type) == 1) {
-                // Media volume, mute and unmute: green pulse at master brightness.
-                set("Pulse Fast", 0.0f, 1.0f, 0.0f);
-              } else if (id(manual_ring_feedback_type) == 2) {
-                // Microphone mute/unmute: preserve the existing solid red
-                // acknowledgement at 100% brightness.
-                auto call = id(status_ring_hw).turn_on();
+              if (feedback == 1) {
+
+                // Media volume/mute:
+                // green pulse at master brightness.
+                set(
+                  "Pulse Fast",
+                  0.0f,
+                  1.0f,
+                  0.0f
+                );
+
+              } else if (feedback == 2) {
+
+                // Microphone mute/unmute:
+                // solid red acknowledgement.
+                auto call =
+                    id(status_ring_hw).turn_on();
+
                 call.set_effect("None");
                 call.set_brightness(1.0f);
                 call.set_color_brightness(1.0f);
@@ -974,8 +1066,78 @@ script:
                 call.set_green(0.0f);
                 call.set_blue(0.0f);
                 call.perform();
+
+              } else if (feedback == 3) {
+
+                // ---------------------------------------------------
+                // DND ON
+                //
+                // Start immediately in red and fade smoothly to OFF.
+                // ---------------------------------------------------
+
+                auto on =
+                    id(status_ring_hw).turn_on();
+
+                on.set_effect("None");
+                on.set_transition_length(0);
+                on.set_brightness(
+                    id(led_ring_brightness).state
+                );
+                on.set_color_brightness(1.0f);
+                on.set_red(1.0f);
+                on.set_green(0.0f);
+                on.set_blue(0.0f);
+                on.perform();
+
+
+                auto off =
+                    id(status_ring_hw).turn_off();
+
+                off.set_transition_length(600);
+                off.perform();
+
+              } else if (feedback == 4) {
+
+                // ---------------------------------------------------
+                // DND OFF
+                //
+                // Start completely dark and fade smoothly up to red.
+                // ---------------------------------------------------
+
+                auto off =
+                    id(status_ring_hw).turn_off();
+
+                off.set_transition_length(0);
+                off.perform();
+
+
+                auto on =
+                    id(status_ring_hw).turn_on();
+
+                on.set_effect("None");
+                on.set_transition_length(600);
+                on.set_brightness(
+                    id(led_ring_brightness).state
+                );
+                on.set_color_brightness(1.0f);
+                on.set_red(1.0f);
+                on.set_green(0.0f);
+                on.set_blue(0.0f);
+                on.perform();
               }
             }
+
+            return;
+          }
+
+          // ---------------------------------------------------------
+          // DO NOT DISTURB
+          //
+          // No ordinary firmware or HA state may light the physical
+          // ring while DND is active.
+          // ---------------------------------------------------------
+          if (id(do_not_disturb).state) {
+            set("off", 0.0f, 0.0f, 0.0f);
             return;
           }
 
@@ -1109,6 +1271,12 @@ script:
       sound_file: "audio::AudioFile*"
     then:
       - lambda: |-
+          // Local firmware sounds are completely suppressed during DND.
+          if (id(do_not_disturb).state) {
+            ESP_LOGD("dnd", "Local sound suppressed by Do Not Disturb");
+            return;
+          }
+
           if (priority) {
             id(external_media_player)
               ->make_call()
@@ -1116,6 +1284,7 @@ script:
               .set_announcement(true)
               .perform();
           }
+
           if ((id(external_media_player).state != media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING) || priority) {
             id(external_media_player)->play_file(sound_file, true, false);
           }
@@ -1368,6 +1537,32 @@ switch:
     restore_mode: ALWAYS_OFF
 
   - platform: template
+    id: do_not_disturb
+    name: "Do Not Disturb"
+    icon: mdi:minus-circle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+    on_turn_on:
+      - if:
+          condition:
+            lambda: 'return !id(init_in_progress);'
+          then:
+            # Immediately silence the physical speaker.
+            - switch.turn_off: amp_enable
+
+            # Re-render the ring. control_leds will force it OFF while DND is on.
+            - script.execute: control_leds
+
+    on_turn_off:
+      - if:
+          condition:
+            lambda: 'return !id(init_in_progress);'
+          then:
+            # Restore whatever LED state is currently actually valid.
+            - script.execute: control_leds
+
+  - platform: template
     id: mic_mute_switch
     name: "Microphone Mute"
     icon: mdi:microphone-off
@@ -1546,14 +1741,44 @@ binary_sensor:
             - delay: 150ms
 
   - platform: gpio
+    id: play_pause_button
     name: "Play Pause"
     use_interrupt: false
     pin:
       tca9555: ioexp
       number: ${key2_exio}
       inverted: true
+
     on_press:
-      - media_player.toggle: external_media_player
+      # Every new press starts as a potential short press.
+      - lambda: |-
+          id(play_pause_long_press_handled) = false;
+
+      # If the button is still held after 1.5 seconds,
+      # treat it as a DND long press immediately.
+      - delay: 1500ms
+
+      - if:
+          condition:
+            binary_sensor.is_on: play_pause_button
+          then:
+            - lambda: |-
+                id(play_pause_long_press_handled) = true;
+
+            - script.execute: toggle_dnd_from_button
+
+    on_release:
+      # Only a press that did NOT already trigger DND becomes Play/Pause.
+      - if:
+          condition:
+            lambda: |-
+              return !id(play_pause_long_press_handled);
+          then:
+            - media_player.toggle: external_media_player
+
+      # Prepare for the next press.
+      - lambda: |-
+          id(play_pause_long_press_handled) = false;
 
   - platform: gpio
     id: volume_up_button
