@@ -644,7 +644,18 @@ voice_assistant:
     - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
     - script.execute: control_leds
   on_timer_finished:
-    - switch.turn_on: timer_ringing
+    # Do Not Disturb: the finished timer is dropped silently. It never rings, now
+    # or later; timers that are still counting down are not touched.
+    - if:
+        condition:
+          switch.is_on: do_not_disturb
+        then:
+          - logger.log:
+              level: DEBUG
+              tag: dnd
+              format: "Timer finished during Do Not Disturb, not ringing"
+        else:
+          - switch.turn_on: timer_ringing
     - lambda: |
         id(next_timer).publish_state(-1);
         id(next_timer_name).publish_state("-");
@@ -905,6 +916,13 @@ globals:
     restore_value: yes
     initial_value: 'false'
   - id: improv_ble_in_progress
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # True while a timer/alarm ring is really running (set by timer_ringing's
+  # on_turn_on, cleared by its on_turn_off). Lets the turn-off cleanup skip
+  # everything when the ring was suppressed by Do Not Disturb.
+  - id: timer_ring_active
     type: bool
     restore_value: no
     initial_value: 'false'
@@ -1235,13 +1253,34 @@ script:
                 feedback_type: 1
                 duration_ms: 1200
 
+  # The ring itself: duck the music, start the looping sound, paint the ring, and
+  # give up after 15 minutes. A script instead of the switch's own on_turn_on so
+  # that on_turn_off can stop it - the 15 minute wait must never outlive a ring.
+  - id: timer_ring_session
+    mode: restart
+    then:
+      - mixer_speaker.apply_ducking:
+          id: media_mixing_input
+          decibel_reduction: 20
+          duration: 0.0s
+      - script.execute: ring_timer
+      - script.execute: control_leds
+      - delay: 15min           # give up if nobody stops it
+      - switch.turn_off: timer_ringing
+
   - id: ring_timer
     then:
-      - script.execute: enable_repeat_one
-      - script.execute:
-          id: play_sound
-          priority: true
-          sound_file: !lambda return id(timer_finished_sound);
+      # Not under Do Not Disturb: enable_repeat_one would leave the announcement
+      # pipeline in repeat mode with nothing to switch it off again.
+      - if:
+          condition:
+            switch.is_off: do_not_disturb
+          then:
+            - script.execute: enable_repeat_one
+            - script.execute:
+                id: play_sound
+                priority: true
+                sound_file: !lambda return id(timer_finished_sound);
 
   - id: enable_repeat_one
     then:
@@ -1337,12 +1376,19 @@ script:
               auto time_now = id(rtc).now();
               if (time_now.hour == alarm_hour && time_now.minute == alarm_minute) {
                 std::string action = id(alarm_action).current_option();
+                // Do Not Disturb: the local ring is dropped, never postponed (this
+                // check only matches during the alarm minute). The HA event is not
+                // a sound or light on the device, so it is still sent.
+                const bool dnd = id(do_not_disturb).state;
+                if (dnd && action != "Send event") {
+                  ESP_LOGD("dnd", "Alarm '%s' during Do Not Disturb: local ring suppressed", action.c_str());
+                }
                 if (action == "Play sound") {
-                  id(timer_ringing).turn_on();
+                  if (!dnd) id(timer_ringing).turn_on();
                 } else if (action == "Send event") {
                   id(send_alarm_event).execute();
                 } else if (action == "Sound and event") {
-                  id(timer_ringing).turn_on();
+                  if (!dnd) id(timer_ringing).turn_on();
                   id(send_alarm_event).execute();
                 }
               }
@@ -1590,6 +1636,14 @@ switch:
                 duration_ms: 700
             # Silence the speaker immediately.
             - switch.turn_off: amp_enable
+            # A timer/alarm that is ringing right now ends cleanly: timer_ringing's
+            # on_turn_off stops the ring session, repeat mode and announcement,
+            # releases the media ducking and repaints the ring.
+            - if:
+                condition:
+                  switch.is_on: timer_ringing
+                then:
+                  - switch.turn_off: timer_ringing
             # End a running announcement (e.g. a reply). Music may keep playing
             # internally; it is silent because the amp is off.
             - if:
@@ -1692,26 +1746,42 @@ switch:
     internal: true
     restore_mode: ALWAYS_OFF
     on_turn_on:
-      - mixer_speaker.apply_ducking:
-          id: media_mixing_input
-          decibel_reduction: 20
-          duration: 0.0s
-      - script.execute: ring_timer
-      - script.execute: control_leds
-      - delay: 15min           # give up if nobody stops it
-      - switch.turn_off: timer_ringing
-    on_turn_off:
-      - script.execute: disable_repeat
+      # Safety net: under Do Not Disturb the ring pipeline never starts. The
+      # callers already check, this catches anything that slips through.
       - if:
           condition:
-            media_player.is_announcing:
+            switch.is_on: do_not_disturb
           then:
-            media_player.stop:
-              announcement: true
-      - mixer_speaker.apply_ducking:
-          id: media_mixing_input
-          decibel_reduction: 0
-          duration: 1.0s
+            - logger.log:
+                level: DEBUG
+                tag: dnd
+                format: "Timer/alarm ring blocked by Do Not Disturb"
+            - switch.turn_off: timer_ringing
+          else:
+            - lambda: id(timer_ring_active) = true;
+            - script.execute: timer_ring_session
+    on_turn_off:
+      # Stops the 15 minute wait (and anything else the ring session still does).
+      - script.stop: timer_ring_session
+      # Full cleanup only for a ring that really started. A ring that Do Not
+      # Disturb blocked changed nothing, and must not cut a running reply.
+      - if:
+          condition:
+            lambda: 'return id(timer_ring_active);'
+          then:
+            - lambda: id(timer_ring_active) = false;
+            - script.execute: disable_repeat
+            - if:
+                condition:
+                  media_player.is_announcing:
+                then:
+                  media_player.stop:
+                    announcement: true
+            # Release the ducking the ring applied.
+            - mixer_speaker.apply_ducking:
+                id: media_mixing_input
+                decibel_reduction: 0
+                duration: 1.0s
       - script.execute: control_leds
 
   - platform: template
