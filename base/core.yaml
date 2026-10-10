@@ -412,11 +412,19 @@ media_player:
                 decibel_reduction: 0
                 duration: 1.0s
     on_mute:
-      - delay: 100ms            # debounce
-      - script.execute: control_leds_volume_changed
+      if:
+        condition:
+          - lambda: return !id(init_in_progress);
+        then:
+          - delay: 100ms            # debounce
+          - script.execute: control_leds_volume_changed
     on_unmute:
-      - delay: 100ms
-      - script.execute: control_leds_volume_changed
+      if:
+        condition:
+          - lambda: return !id(init_in_progress);
+        then:
+          - delay: 100ms
+          - script.execute: control_leds_volume_changed
     on_volume:
       if:
         condition:
@@ -849,6 +857,23 @@ globals:
     type: float
     restore_value: no
     initial_value: '0.8'
+  # Temporary LED feedback overlay currently shown (see show_ring_feedback):
+  #   0 = none
+  #   1 = media volume / mute: green pulse
+  #   2 = microphone mute / unmute: solid red
+  #   3 = DND switched on: red, fading to dark
+  #   4 = DND switched off: dark, fading up to red
+  # This never touches the base state in status_ring.
+  - id: ring_feedback_type
+    type: int
+    restore_value: no
+    initial_value: '0'
+  # Set once control_leds has painted the current feedback, so a repaint caused
+  # by some other state change does not restart a visible feedback animation.
+  - id: ring_feedback_rendered
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   - id: init_in_progress
     type: bool
     restore_value: no
@@ -923,24 +948,58 @@ script:
                      m->get_probability_cutoff(), m->is_enabled() ? " (active)" : "");
           }
 
-  - id: flash_ring
+  # Shared controller for short, temporary LED feedback (types: see the
+  # ring_feedback_type global). It only sets the type and asks control_leds to
+  # paint it; control_leds is the only place that renders the feedback.
+  #
+  # mode: restart - the most recent request wins: it stops the previous feedback
+  # timer, replaces the overlay and starts its own duration from zero. A DND
+  # acknowledgement (type 3/4) must not be cut short by volume or microphone
+  # feedback, so those are requested through control_leds_volume_changed and
+  # flash_mic_mute_ring, which drop themselves while type 3/4 is showing. (The
+  # guard has to live in the callers: a restart would already have stopped the
+  # running acknowledgement before any check inside this script could run.)
+  - id: show_ring_feedback
+    mode: restart
+    parameters:
+      feedback_type: int
+      duration_ms: int
     then:
-      - script.execute:
-          id: led_set_effect
-          effect: "solid"
-          r: 1.0
-          g: 0.0
-          b: 0.0
-          scale: 1.0
-      - delay: 250ms
-      # Return to the real state instead of going dark (e.g. if a timer is
-      # counting or the VA is active while the mic is muted/unmuted).
+      - lambda: |-
+          id(ring_feedback_type) = feedback_type;
+          id(ring_feedback_rendered) = false;
+
+      # control_leds renders the overlay.
       - script.execute: control_leds
+
+      # Cooperative delay; the rest of the device keeps running.
+      - delay: !lambda 'return duration_ms;'
+
+      - lambda: |-
+          id(ring_feedback_type) = 0;
+          id(ring_feedback_rendered) = false;
+
+      # Re-evaluate every current state now that the overlay is gone. The base
+      # state in status_ring was never touched, so it comes back exactly.
+      - script.execute: control_leds
+
+  # Brief red acknowledgement for microphone mute and unmute.
+  - id: flash_mic_mute_ring
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ring_feedback_type) < 3;'   # never cut a DND acknowledgement short
+          then:
+            - script.execute:
+                id: show_ring_feedback
+                feedback_type: 2
+                duration_ms: 250
 
   # Minimal LED hardware dispatcher: off / solid / a named built-in effect.
   # The ONLY writer of status_ring_hw. It never touches the base-state light
   # status_ring. `scale` multiplies the master/night brightness (1.0 for
-  # overlays; the base state passes its own brightness).
+  # overlays; the base state passes its own brightness). `transition_ms` is the
+  # fade time; a negative value keeps the strip's default transition.
   - id: led_set_effect
     mode: restart
     parameters:
@@ -949,6 +1008,7 @@ script:
       g: float
       b: float
       scale: float
+      transition_ms: int
     then:
       - lambda: |-
           const bool night = id(night_mode).state;
@@ -966,7 +1026,9 @@ script:
           condition:
             lambda: 'return effect == "off";'
           then:
-            - light.turn_off: status_ring_hw
+            - light.turn_off:
+                id: status_ring_hw
+                transition_length: !lambda 'return transition_ms < 0 ? id(status_ring_hw).get_default_transition_length() : (uint32_t) transition_ms;'
           else:
             - if:
                 condition:
@@ -975,6 +1037,7 @@ script:
                   - light.turn_on:
                       id: status_ring_hw
                       effect: "None"    # clear any running effect so solid is steady
+                      transition_length: !lambda 'return transition_ms < 0 ? id(status_ring_hw).get_default_transition_length() : (uint32_t) transition_ms;'
                       brightness: !lambda 'return id(led_ring_level);'
                       red: !lambda 'return id(led_ring_color_r);'
                       green: !lambda 'return id(led_ring_color_g);'
@@ -982,6 +1045,7 @@ script:
                 else:
                   - light.turn_on:
                       id: status_ring_hw
+                      transition_length: !lambda 'return transition_ms < 0 ? id(status_ring_hw).get_default_transition_length() : (uint32_t) transition_ms;'
                       brightness: !lambda 'return id(led_ring_level);'
                       red: !lambda 'return id(led_ring_color_r);'
                       green: !lambda 'return id(led_ring_color_g);'
@@ -1010,8 +1074,37 @@ script:
                    (int)ringing, (int)timers_active, phase);
 
           auto set = [&](const std::string &effect, float r, float g, float b, float scale = 1.0f) {
-            id(led_set_effect).execute(effect, r, g, b, scale);
+            id(led_set_effect).execute(effect, r, g, b, scale, -1);
           };
+
+          // Temporary feedback overlay: highest priority. All underlying states keep
+          // changing, but none may repaint status_ring_hw until the feedback has
+          // ended (show_ring_feedback then calls control_leds again). It is painted
+          // once; later calls just return so the animation is not restarted.
+          if (id(ring_feedback_type) != 0) {
+            if (!id(ring_feedback_rendered)) {
+              id(ring_feedback_rendered) = true;
+              switch (id(ring_feedback_type)) {
+                case 1:                              // media volume / mute: green pulse
+                  set("Pulse Fast", 0.0f, 1.0f, 0.0f);
+                  break;
+                case 2:                              // microphone mute / unmute: solid red
+                  set("solid", 1.0f, 0.0f, 0.0f);
+                  break;
+                case 3:                              // DND on: start red, fade to dark
+                  id(led_set_effect).execute("solid", 1.0f, 0.0f, 0.0f, 1.0f, 0);
+                  id(led_set_effect).execute("off", 0.0f, 0.0f, 0.0f, 1.0f, 600);
+                  break;
+                case 4:                              // DND off: start dark, fade up to red
+                  id(led_set_effect).execute("off", 0.0f, 0.0f, 0.0f, 1.0f, 0);
+                  id(led_set_effect).execute("solid", 1.0f, 0.0f, 0.0f, 1.0f, 600);
+                  break;
+                default:
+                  break;
+              }
+            }
+            return;
+          }
 
           if (improv_ble) {                          // BLE provisioning
             set("Pulse Medium", 1.0, 0.89, 0.71);    // warm white
@@ -1074,20 +1167,18 @@ script:
           set("solid", base.get_red() * cb, base.get_green() * cb, base.get_blue() * cb,
               base.get_brightness());
 
-  # A short green pulse on a volume change, then back to the state machine.
+  # A green pulse (1.2 s) for media volume, mute and unmute. Dropped while a DND
+  # acknowledgement is showing so it can never cut it short.
   - id: control_leds_volume_changed
-    mode: restart
     then:
-      # Night mode dims the pulse colour inside led_set_effect.
-      - script.execute:
-          id: led_set_effect
-          effect: "Pulse Fast"
-          r: 0.0
-          g: 1.0
-          b: 0.0
-          scale: 1.0
-      - delay: 1.2s
-      - script.execute: control_leds
+      - if:
+          condition:
+            lambda: 'return id(ring_feedback_type) < 3;'
+          then:
+            - script.execute:
+                id: show_ring_feedback
+                feedback_type: 1
+                duration_ms: 1200
 
   - id: ring_timer
     then:
@@ -1422,11 +1513,11 @@ switch:
     turn_on_action:
       - lambda: id(mic_is_muted) = true;
       - microphone.mute: i2s_mics
-      - script.execute: flash_ring
+      - script.execute: flash_mic_mute_ring
     turn_off_action:
       - lambda: id(mic_is_muted) = false;
       - microphone.unmute: i2s_mics
-      - script.execute: flash_ring
+      - script.execute: flash_mic_mute_ring
 
   - platform: template
     id: wake_sound
