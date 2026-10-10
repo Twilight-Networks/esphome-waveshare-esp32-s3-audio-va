@@ -399,12 +399,15 @@ media_player:
     on_state:
       # Amp follows playback: turn it on the instant audio starts. It stays on
       # afterwards (the speaker then holds the line at clean silence), so there
-      # is no per-sound clicking - only the boot window is silent.
+      # is no per-sound clicking - only the boot window is silent. Under Do Not
+      # Disturb it stays off, so music and replies keep running but stay silent.
       - if:
           condition:
-            or:
-              - media_player.is_announcing:
-              - lambda: 'return id(external_media_player)->state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING;'
+            and:
+              - switch.is_off: do_not_disturb
+              - or:
+                  - media_player.is_announcing:
+                  - lambda: 'return id(external_media_player)->state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING;'
           then:
             - switch.turn_on: amp_enable
       - if:
@@ -504,6 +507,7 @@ micro_wake_word:
                                   and:
                                     - switch.is_on: wake_sound
                                     - switch.is_off: night_mode   # the ring is enough at night
+                                    - switch.is_off: do_not_disturb
                                 then:
                                   - script.execute:
                                       id: play_sound
@@ -539,6 +543,13 @@ voice_assistant:
           - micro_wake_word.start:
     - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
     - script.execute: control_leds
+    # Do Not Disturb: no boot chime now, and none later when DND ends. Marking it
+    # done here also stops the next HA reconnect from playing it.
+    - if:
+        condition:
+          switch.is_on: do_not_disturb
+        then:
+          - lambda: id(boot_chime_done) = true;
     # One-shot "ready" chime. It MUST run after micro_wake_word.start above: the
     # speaker is a slave to the mic's I2S clock, so playing before the mic is
     # capturing hangs the announcement (and then wake word stops working). The
@@ -997,7 +1008,8 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(ring_feedback_type) < 3;'   # never cut a DND acknowledgement short
+            # Never cut a DND acknowledgement short, and no feedback at all under DND.
+            lambda: 'return id(ring_feedback_type) < 3 && !id(do_not_disturb).state;'
           then:
             - script.execute:
                 id: show_ring_feedback
@@ -1101,20 +1113,18 @@ script:
             id(led_set_effect).execute(effect, r, g, b, scale, -1);
           };
 
-          // Temporary feedback overlay: highest priority. All underlying states keep
-          // changing, but none may repaint status_ring_hw until the feedback has
-          // ended (show_ring_feedback then calls control_leds again). It is painted
-          // once; later calls just return so the animation is not restarted.
-          if (id(ring_feedback_type) != 0) {
+          const int  feedback = id(ring_feedback_type);
+          const bool dnd      = id(do_not_disturb).state;
+
+          // 1. Do Not Disturb acknowledgement (feedback 3/4): highest priority, the
+          // only thing the ring may show under DND. All underlying states keep
+          // changing, but none may repaint status_ring_hw until it has ended
+          // (show_ring_feedback then calls control_leds again). It is painted once;
+          // later calls just return so the animation is not restarted.
+          if (feedback == 3 || feedback == 4) {
             if (!id(ring_feedback_rendered)) {
               id(ring_feedback_rendered) = true;
-              switch (id(ring_feedback_type)) {
-                case 1:                              // media volume / mute: green pulse
-                  set("Pulse Fast", 0.0f, 1.0f, 0.0f);
-                  break;
-                case 2:                              // microphone mute / unmute: solid red
-                  set("solid", 1.0f, 0.0f, 0.0f);
-                  break;
+              switch (feedback) {
                 case 3:                              // DND on: start red, fade to dark
                   id(led_set_effect).execute("solid", 1.0f, 0.0f, 0.0f, 1.0f, 0);
                   id(led_set_effect).execute("off", 0.0f, 0.0f, 0.0f, 1.0f, 600);
@@ -1125,6 +1135,27 @@ script:
                   break;
                 default:
                   break;
+              }
+            }
+            return;
+          }
+
+          // 2. Do Not Disturb: the ring stays completely dark. This outranks every
+          // normal state below - temporary feedback, setup, boot, offline, errors,
+          // voice assistant, timers and the base state - and Night mode.
+          if (dnd) {
+            set("off", 0, 0, 0);
+            return;
+          }
+
+          // 3. Temporary feedback overlay (feedback 1/2), same rules as above.
+          if (feedback != 0) {
+            if (!id(ring_feedback_rendered)) {
+              id(ring_feedback_rendered) = true;
+              if (feedback == 1) {                   // media volume / mute: green pulse
+                set("Pulse Fast", 0.0f, 1.0f, 0.0f);
+              } else if (feedback == 2) {            // microphone mute / unmute: solid red
+                set("solid", 1.0f, 0.0f, 0.0f);
               }
             }
             return;
@@ -1192,12 +1223,12 @@ script:
               base.get_brightness());
 
   # A green pulse (1.2 s) for media volume, mute and unmute. Dropped while a DND
-  # acknowledgement is showing so it can never cut it short.
+  # acknowledgement is showing so it can never cut it short, and under DND.
   - id: control_leds_volume_changed
     then:
       - if:
           condition:
-            lambda: 'return id(ring_feedback_type) < 3;'
+            lambda: 'return id(ring_feedback_type) < 3 && !id(do_not_disturb).state;'
           then:
             - script.execute:
                 id: show_ring_feedback
@@ -1238,6 +1269,13 @@ script:
       sound_file: "audio::AudioFile*"
     then:
       - lambda: |-
+          // Do Not Disturb: no local sound at all (wake beep, boot chime, timer,
+          // error). Returning before the STOP below also leaves a running
+          // announcement or music alone.
+          if (id(do_not_disturb).state) {
+            ESP_LOGD("dnd", "Local sound suppressed by Do Not Disturb");
+            return;
+          }
           if (priority) {
             id(external_media_player)
               ->make_call()
@@ -1517,6 +1555,68 @@ switch:
     # the moment audio starts and leaves it on (the speaker then holds the line
     # at silence, which is clean).
     restore_mode: ALWAYS_OFF
+    # Do Not Disturb: whoever switches the amp on (e.g. the HA entity) is
+    # overruled - it goes straight back off.
+    on_turn_on:
+      - if:
+          condition:
+            switch.is_on: do_not_disturb
+          then:
+            - switch.turn_off: amp_enable
+
+  # Do Not Disturb: a hard quiet mode. The speaker amp is off (so replies, music
+  # and timers cannot be heard), local sounds are suppressed and the ring stays
+  # dark - except for a short acknowledgement when DND is switched on or off.
+  # The wake word and the voice assistant keep working, silently.
+  - platform: template
+    id: do_not_disturb
+    name: "Do Not Disturb"
+    icon: mdi:minus-circle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    # Also fires during the restore in setup(), hence the init_in_progress gate.
+    # A DND restored as ON needs nothing here: the amp is off after a boot, the
+    # boot chime is skipped and control_leds keeps the ring dark.
+    on_turn_on:
+      - if:
+          condition:
+            lambda: 'return !id(init_in_progress);'
+          then:
+            # Acknowledgement first: it takes over the ring before anything can
+            # repaint it with the now-dark DND state.
+            - script.execute:
+                id: show_ring_feedback
+                feedback_type: 3
+                duration_ms: 700
+            # Silence the speaker immediately.
+            - switch.turn_off: amp_enable
+            # End a running announcement (e.g. a reply). Music may keep playing
+            # internally; it is silent because the amp is off.
+            - if:
+                condition:
+                  media_player.is_announcing:
+                then:
+                  - media_player.stop:
+                      announcement: true
+    on_turn_off:
+      - if:
+          condition:
+            lambda: 'return !id(init_in_progress);'
+          then:
+            # Sound that is playing right now becomes audible again.
+            - if:
+                condition:
+                  or:
+                    - media_player.is_announcing:
+                    - lambda: 'return id(external_media_player)->state == media_player::MediaPlayerState::MEDIA_PLAYER_STATE_PLAYING;'
+                then:
+                  - switch.turn_on: amp_enable
+            # Acknowledgement; when it ends show_ring_feedback calls control_leds,
+            # which paints whatever state is valid by then.
+            - script.execute:
+                id: show_ring_feedback
+                feedback_type: 4
+                duration_ms: 700
 
   - platform: template
     id: mic_mute_switch
