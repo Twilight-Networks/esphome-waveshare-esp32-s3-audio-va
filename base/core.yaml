@@ -659,15 +659,70 @@ voice_assistant:
         }
         // The ring is repainted centrally by control_leds().
 
+# ---------------------------------------------------------------------------
+# Status ring: BASE LAYER vs. HARDWARE LAYER.
+#
+#   status_ring     the light Home Assistant / Node-RED sees. It holds only the
+#                   DESIRED persistent ring state and never drives any LED. The
+#                   outputs below are template outputs that write nowhere.
+#   status_ring_hw  the real WS2812 strip, internal. Every firmware overlay
+#                   (voice phases, timer, errors, volume/mic feedback, ...) is
+#                   painted here, and only by led_set_effect.
+#
+# control_leds renders the base state onto the hardware when no overlay is
+# active. Nothing but Home Assistant may change status_ring, so an overlay can
+# never overwrite the base state: when it ends, control_leds paints it again.
+# ---------------------------------------------------------------------------
+output:
+  - platform: template
+    id: status_ring_base_red
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+
+  - platform: template
+    id: status_ring_base_green
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+
+  - platform: template
+    id: status_ring_base_blue
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+
 light:
-  - platform: esp32_rmt_led_strip
+  # BASE LAYER - exposed to Home Assistant, drives no hardware.
+  - platform: rgb
     id: status_ring
     name: "Status Ring"
+    red: status_ring_base_red
+    green: status_ring_base_green
+    blue: status_ring_base_blue
+    default_transition_length: 0s
+    restore_mode: ALWAYS_OFF      # Node-RED is the source of truth after a boot
+    # Also fires during setup(), hence the init_in_progress gate.
+    on_state:
+      - if:
+          condition:
+            lambda: 'return !id(init_in_progress);'
+          then:
+            - script.execute: control_leds
+
+  # HARDWARE LAYER - the physical ring, internal. Written only by led_set_effect.
+  - platform: esp32_rmt_led_strip
+    id: status_ring_hw
+    internal: true
     pin: ${led_pin}
     num_leds: ${led_num}
     chipset: WS2812
     channel_colors: RGB
     default_transition_length: 150ms
+    restore_mode: ALWAYS_OFF
     effects:
       # update_interval must be LONGER than transition_length: it is how often
       # the pulse flips its brightness target (min<->max), not a frame rate. A
@@ -870,13 +925,22 @@ script:
 
   - id: flash_ring
     then:
-      - light.turn_on: { id: status_ring, red: 1.0, green: 0.0, blue: 0.0, brightness: 100%, effect: "None" }
+      - script.execute:
+          id: led_set_effect
+          effect: "solid"
+          r: 1.0
+          g: 0.0
+          b: 0.0
+          scale: 1.0
       - delay: 250ms
       # Return to the real state instead of going dark (e.g. if a timer is
       # counting or the VA is active while the mic is muted/unmuted).
       - script.execute: control_leds
 
-  # Minimal LED dispatcher: off / solid / a named built-in effect.
+  # Minimal LED hardware dispatcher: off / solid / a named built-in effect.
+  # The ONLY writer of status_ring_hw. It never touches the base-state light
+  # status_ring. `scale` multiplies the master/night brightness (1.0 for
+  # overlays; the base state passes its own brightness).
   - id: led_set_effect
     mode: restart
     parameters:
@@ -884,6 +948,7 @@ script:
       r: float
       g: float
       b: float
+      scale: float
     then:
       - lambda: |-
           const bool night = id(night_mode).state;
@@ -894,21 +959,21 @@ script:
           id(led_ring_color_r) = r * k;
           id(led_ring_color_g) = g * k;
           id(led_ring_color_b) = b * k;
-          id(led_ring_level) = level;
+          id(led_ring_level) = level * scale;
           ESP_LOGI("led", "led_set_effect: effect='%s' rgb(%.2f, %.2f, %.2f) brightness=%.2f night=%d",
-                   effect.c_str(), r * k, g * k, b * k, level, (int) night);
+                   effect.c_str(), r * k, g * k, b * k, level * scale, (int) night);
       - if:
           condition:
             lambda: 'return effect == "off";'
           then:
-            - light.turn_off: status_ring
+            - light.turn_off: status_ring_hw
           else:
             - if:
                 condition:
                   lambda: 'return effect == "solid";'
                 then:
                   - light.turn_on:
-                      id: status_ring
+                      id: status_ring_hw
                       effect: "None"    # clear any running effect so solid is steady
                       brightness: !lambda 'return id(led_ring_level);'
                       red: !lambda 'return id(led_ring_color_r);'
@@ -916,7 +981,7 @@ script:
                       blue: !lambda 'return id(led_ring_color_b);'
                 else:
                   - light.turn_on:
-                      id: status_ring
+                      id: status_ring_hw
                       brightness: !lambda 'return id(led_ring_level);'
                       red: !lambda 'return id(led_ring_color_r);'
                       green: !lambda 'return id(led_ring_color_g);'
@@ -944,8 +1009,8 @@ script:
                    (int)wifi_connected, (int)api_connected, (int)improv_ble, (int)init_progress,
                    (int)ringing, (int)timers_active, phase);
 
-          auto set = [&](const std::string &effect, float r, float g, float b) {
-            id(led_set_effect).execute(effect, r, g, b);
+          auto set = [&](const std::string &effect, float r, float g, float b, float scale = 1.0f) {
+            id(led_set_effect).execute(effect, r, g, b, scale);
           };
 
           if (improv_ble) {                          // BLE provisioning
@@ -995,20 +1060,32 @@ script:
             return;
           }
 
-          set("off", 0, 0, 0);                       // idle
+          // No firmware overlay is active: render the DESIRED base state set from
+          // Home Assistant / Node-RED. status_ring is only read here, never written.
+          // remote_values is the requested state (before gamma, which the strip
+          // applies once); the colour is scaled by its colour brightness and the
+          // requested brightness is passed on as the scale for the master/night level.
+          const auto &base = id(status_ring).remote_values;
+          if (!base.is_on()) {
+            set("off", 0, 0, 0);                     // idle, base state off
+            return;
+          }
+          const float cb = base.get_color_brightness();
+          set("solid", base.get_red() * cb, base.get_green() * cb, base.get_blue() * cb,
+              base.get_brightness());
 
   # A short green pulse on a volume change, then back to the state machine.
   - id: control_leds_volume_changed
     mode: restart
     then:
-      - light.turn_on:
-          id: status_ring
-          brightness: !lambda 'return id(led_ring_brightness).state;'
-          red: 0.0
-          # Pulse Fast sets its own brightness, so Night mode dims the colour.
-          green: !lambda 'return id(night_mode).state ? id(night_led_brightness).state : 1.0f;'
-          blue: 0.0
+      # Night mode dims the pulse colour inside led_set_effect.
+      - script.execute:
+          id: led_set_effect
           effect: "Pulse Fast"
+          r: 0.0
+          g: 1.0
+          b: 0.0
+          scale: 1.0
       - delay: 1.2s
       - script.execute: control_leds
 
@@ -1493,16 +1570,8 @@ number:
     step: 0.05
     initial_value: 0.8
     mode: slider
-    on_value:
-      - if:
-          condition:
-            and:
-              - light.is_on: status_ring
-              - switch.is_off: night_mode   # Night mode has its own brightness
-          then:
-            - light.turn_on:
-                id: status_ring
-                brightness: !lambda 'return x;'
+    # Only repaints; it never touches the base state in status_ring.
+    on_value: *repaint_if_ready
 
   # Ring brightness while Night mode is on. The floor is where the WS2812s are
   # still visibly lit after gamma correction.
