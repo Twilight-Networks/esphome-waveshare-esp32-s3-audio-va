@@ -30,6 +30,15 @@ substitutions:
   voice_assist_not_ready_phase_id: '10'           # no HA connection
   voice_assist_error_phase_id: '11'               # pipeline error
 
+  # Ring colour (red, green, blue, 0.0 - 1.0) for the voice assistant phases:
+  # listening (awake and speech detected), thinking and replying. The animation
+  # comes from the "Listening / Thinking / Replying effect" selects. Error and
+  # not-ready keep their red, and the timer colours are separate. Night mode
+  # still dims whatever colour is set here.
+  voice_assist_color_r: '0.0'
+  voice_assist_color_g: '0.0'
+  voice_assist_color_b: '1.0'                     # blue
+
   # ---------------------------------------------------------------------------
   # Pins - Waveshare ESP32-S3-AUDIO-Board (see docs/HARDWARE.md). Do not change
   # unless you are on a different board.
@@ -1144,13 +1153,13 @@ script:
             // Listening effect, so the chosen animation shows from the wake word on.
             case ${voice_assist_waiting_for_command_phase_id}:
             case ${voice_assist_listening_for_command_phase_id}:
-              set(id(listening_effect).current_option(), 0.8, 0.0, 0.8);
+              set(id(listening_effect).current_option(), ${voice_assist_color_r}, ${voice_assist_color_g}, ${voice_assist_color_b});
               return;
             case ${voice_assist_thinking_phase_id}:
-              set(id(thinking_effect).current_option(), 0.6, 0.0, 0.6);
+              set(id(thinking_effect).current_option(), ${voice_assist_color_r}, ${voice_assist_color_g}, ${voice_assist_color_b});
               return;
             case ${voice_assist_replying_phase_id}:
-              set(id(replying_effect).current_option(), 0.6, 0.0, 0.6);
+              set(id(replying_effect).current_option(), ${voice_assist_color_r}, ${voice_assist_color_g}, ${voice_assist_color_b});
               return;
             case ${voice_assist_error_phase_id}:
               set("Pulse Fast", 1.0, 0.0, 0.0);
@@ -1442,7 +1451,7 @@ select:
     entity_category: config
     optimistic: true
     restore_value: true
-    initial_option: "Wipe"
+    initial_option: "Spinner"
     options: *va_ring_effects
     on_value: *repaint_if_ready
 
