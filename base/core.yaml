@@ -998,8 +998,9 @@ script:
   # Minimal LED hardware dispatcher: off / solid / a named built-in effect.
   # The ONLY writer of status_ring_hw. It never touches the base-state light
   # status_ring. `scale` multiplies the master/night brightness (1.0 for
-  # overlays; the base state passes its own brightness). `transition_ms` is the
-  # fade time; a negative value keeps the strip's default transition.
+  # overlays; the base state passes its own brightness). `transition_ms` is an
+  # optional fade time for "off" and "solid" only; a negative value keeps the
+  # strip's default transition. Named effects ignore it.
   - id: led_set_effect
     mode: restart
     parameters:
@@ -1037,15 +1038,29 @@ script:
                   - light.turn_on:
                       id: status_ring_hw
                       effect: "None"    # clear any running effect so solid is steady
-                      transition_length: !lambda 'return transition_ms < 0 ? id(status_ring_hw).get_default_transition_length() : (uint32_t) transition_ms;'
                       brightness: !lambda 'return id(led_ring_level);'
                       red: !lambda 'return id(led_ring_color_r);'
                       green: !lambda 'return id(led_ring_color_g);'
                       blue: !lambda 'return id(led_ring_color_b);'
+                  # A timed fade (DND acknowledgement). ESPHome does not allow
+                  # `effect` and `transition_length` in one light.turn_on, so the
+                  # effect was cleared by the call above and the same colour is
+                  # applied again here with its own transition. Skipped for the
+                  # normal paints (transition_ms < 0).
+                  - if:
+                      condition:
+                        lambda: 'return transition_ms >= 0;'
+                      then:
+                        - light.turn_on:
+                            id: status_ring_hw
+                            transition_length: !lambda 'return (uint32_t) transition_ms;'
+                            brightness: !lambda 'return id(led_ring_level);'
+                            red: !lambda 'return id(led_ring_color_r);'
+                            green: !lambda 'return id(led_ring_color_g);'
+                            blue: !lambda 'return id(led_ring_color_b);'
                 else:
                   - light.turn_on:
                       id: status_ring_hw
-                      transition_length: !lambda 'return transition_ms < 0 ? id(status_ring_hw).get_default_transition_length() : (uint32_t) transition_ms;'
                       brightness: !lambda 'return id(led_ring_level);'
                       red: !lambda 'return id(led_ring_color_r);'
                       green: !lambda 'return id(led_ring_color_g);'
