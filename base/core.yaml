@@ -1156,6 +1156,35 @@ script:
             last_time_string = current_time_string;
           }
 
+  # Hold-to-repeat for the volume keys. One step on press, then after 400 ms a
+  # step every 150 ms while the key stays down. mode: restart so a quick second
+  # press is never swallowed by a still-running repeat from the previous one.
+  - id: volume_key_repeat
+    mode: restart
+    parameters:
+      up: bool
+    then:
+      - if:
+          condition:
+            lambda: 'return up;'
+          then:
+            - media_player.volume_up: external_media_player
+          else:
+            - media_player.volume_down: external_media_player
+      - delay: 400ms
+      - while:
+          condition:
+            lambda: 'return up ? id(volume_up_button).state : id(volume_down_button).state;'
+          then:
+            - if:
+                condition:
+                  lambda: 'return up;'
+                then:
+                  - media_player.volume_up: external_media_player
+                else:
+                  - media_player.volume_down: external_media_player
+            - delay: 150ms
+
 select:
   # Presets are relative to each model's own default cutoff (from its manifest,
   # or `probability_cutoff:` in YAML), so they stay sensible when a model is
@@ -1531,16 +1560,22 @@ button:
 
 binary_sensor:
   - platform: gpio
-    name: "Key1"
+    id: volume_down_button
+    name: "Volume Down"
+    use_interrupt: false
     pin:
       tca9555: ioexp
       number: ${key1_exio}
       inverted: true
     on_press:
-      - media_player.volume_down: external_media_player
+      - script.execute:
+          id: volume_key_repeat
+          up: false
 
   - platform: gpio
-    name: "Key2"
+    id: play_pause_button
+    name: "Play Pause"
+    use_interrupt: false
     pin:
       tca9555: ioexp
       number: ${key2_exio}
@@ -1556,13 +1591,17 @@ binary_sensor:
             - media_player.toggle: external_media_player
 
   - platform: gpio
-    name: "Key3"
+    id: volume_up_button
+    name: "Volume Up"
+    use_interrupt: false
     pin:
       tca9555: ioexp
       number: ${key3_exio}
       inverted: true
     on_press:
-      - media_player.volume_up: external_media_player
+      - script.execute:
+          id: volume_key_repeat
+          up: true
 
   # Onboard BOOT button (GPIO0, a strapping pin, direct - not via the expander).
   # Held for 2 to 10 s it enters deep sleep, but only when ${enable_deep_sleep}
