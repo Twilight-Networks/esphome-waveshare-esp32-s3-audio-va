@@ -919,6 +919,18 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+  # Play/Pause key state (see play_pause_button). Every physical press gets a new
+  # number; a delayed long-press check only acts for the press it was started by.
+  - id: play_pause_press_id
+    type: int
+    restore_value: no
+    initial_value: '0'
+  # True once the current press has been given its one action (timer stopped,
+  # Do Not Disturb toggled, or - on release - Play/Pause). Reset by the next press.
+  - id: play_pause_press_handled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   # True while a timer/alarm ring is really running (set by timer_ringing's
   # on_turn_on, cleared by its on_turn_off). Lets the turn-off cleanup skip
   # everything when the ring was suppressed by Do Not Disturb.
@@ -1461,6 +1473,34 @@ script:
                   - media_player.volume_down: external_media_player
             - delay: 150ms
 
+  # Long-press detection for the Play/Pause key. Started by every press that did
+  # not stop a ringing timer; 1.5 s later, if THIS press is still the current
+  # one, still held and still undecided, it toggles Do Not Disturb. mode: restart
+  # plus the press number make a stale check impossible: a new press restarts
+  # (cancels) it, a release stops it, and press_token no longer matches anyway.
+  - id: play_pause_long_press_watch
+    mode: restart
+    parameters:
+      press_token: int
+    then:
+      - delay: 1500ms
+      - if:
+          condition:
+            lambda: 'return press_token == id(play_pause_press_id) && !id(play_pause_press_handled) && id(play_pause_button).state;'
+          then:
+            - lambda: id(play_pause_press_handled) = true;
+            - if:
+                condition:
+                  switch.is_on: timer_ringing
+                then:
+                  # A timer began ringing during the hold: this press silences it
+                  # and never toggles Do Not Disturb.
+                  - switch.turn_off: timer_ringing
+                else:
+                  # DND only ever changes through its switch, so its on/off actions
+                  # and the ring acknowledgement are reused as they are.
+                  - switch.toggle: do_not_disturb
+
 select:
   # Presets are relative to each model's own default cutoff (from its manifest,
   # or `probability_cutoff:` in YAML), so they stay sensible when a model is
@@ -1934,15 +1974,46 @@ binary_sensor:
       tca9555: ioexp
       number: ${key2_exio}
       inverted: true
+    # Every press gets exactly one action:
+    #   - timer/alarm ringing: the press itself silences it (no DND, no Play/Pause);
+    #   - held for 1.5 s: Do Not Disturb toggles (play_pause_long_press_watch);
+    #   - released earlier: Play/Pause, on release.
     on_press:
-      # A timer or alarm is ringing -> Play/Pause silences it instead.
+      # A new press invalidates everything left over from the previous one.
+      - script.stop: play_pause_long_press_watch
+      - lambda: |-
+          id(play_pause_press_id) = id(play_pause_press_id) + 1;
+          id(play_pause_press_handled) = false;
       - if:
           condition:
             switch.is_on: timer_ringing
           then:
+            # A timer or alarm is ringing -> Play/Pause silences it instead. The
+            # press is used up, so it can neither start a long press nor, on
+            # release, toggle playback.
+            - lambda: id(play_pause_press_handled) = true;
             - switch.turn_off: timer_ringing
           else:
-            - media_player.toggle: external_media_player
+            - script.execute:
+                id: play_pause_long_press_watch
+                press_token: !lambda 'return id(play_pause_press_id);'
+    on_release:
+      - script.stop: play_pause_long_press_watch
+      # Only a press that has not been used yet becomes Play/Pause (a long press or
+      # a ring-silencing press has been handled already).
+      - if:
+          condition:
+            lambda: 'return !id(play_pause_press_handled);'
+          then:
+            - lambda: id(play_pause_press_handled) = true;
+            - if:
+                condition:
+                  switch.is_on: timer_ringing
+                then:
+                  # A timer began ringing while the key was held: silence it.
+                  - switch.turn_off: timer_ringing
+                else:
+                  - media_player.toggle: external_media_player
 
   - platform: gpio
     id: volume_up_button
