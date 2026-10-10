@@ -8,6 +8,11 @@ the little AI smart-speaker devkit with a dual-mic array, an ES8311 codec, three
 buttons and a 7-LED RGB ring. Pure ESPHome, no custom C firmware: an always-on
 core you pull as a package, plus one thin config file you actually edit.
 
+> [!NOTE]
+> **Twilight-Networks fork:** this fork adds Volume Up/Down keys, a Do Not Disturb
+> mode (long-press Play/Pause) and a layered status ring. See
+> [docs/TWILIGHT-CUSTOMIZATIONS.md](docs/TWILIGHT-CUSTOMIZATIONS.md).
+
 > [!TIP]
 > ⭐ **Enjoying this project?** Every star is real motivation to keep it going.
 >
@@ -82,7 +87,7 @@ You  ──▶  Waveshare ESP32-S3  ──▶  Home Assistant Assist
    Install.
 4. In Home Assistant: the new ESPHome device appears, open **Configure** and
    assign an Assist pipeline.
-5. Say "Alexa". The ring should go violet. To use another wake word, change
+5. Say "Alexa". The ring should go blue. To use another wake word, change
    **Wake word** on the device page (see [Wake words](#wake-words)).
 
 The example config tracks `main`, so every build gets the latest version. To
@@ -135,6 +140,7 @@ ci/
   build.yml                # compiles the firmware on every push and pull request
 docs/
   HARDWARE.md              # pinout, I2C map, gotchas
+  TWILIGHT-CUSTOMIZATIONS.md  # Twilight fork: changes, LED priorities, DND, test matrix
 scripts/
   validate.py              # offline YAML check (syntax, substitutions, duplicate ids)
   esplog.py                # stream device logs over the native API

@@ -1,5 +1,24 @@
 # Changelog
 
+## [Twilight fork on v1.2.0] - 2026-10-10
+
+Twilight-Networks customizations re-implemented on upstream v1.2.0. Details,
+LED priority table and test matrix: `docs/TWILIGHT-CUSTOMIZATIONS.md`.
+
+### Added
+- Volume Up/Down keys with auto-repeat; Play/Pause key on release.
+- **Do Not Disturb** switch (hard quiet mode: ring dark, audio and local sounds
+  off, timers/alarms never played later, wake word stays active). Long press
+  on Play/Pause (1.5 s) toggles it.
+- Ring feedback overlays (volume, mic mute, DND acknowledgement).
+
+### Changed
+- Status ring split into `status_ring` (base state from Home Assistant /
+  Node-RED, no persistence) and `status_ring_hw` (physical LEDs, only written
+  by `led_set_effect`).
+- Voice assistant color is blue; `replying_effect` defaults to Spinner.
+- Package and boot sound are pulled from the Twilight fork.
+
 ## [1.2.0] - 2026-10-07
 
 **Switch your config to `ref: main`.** The example config now uses
