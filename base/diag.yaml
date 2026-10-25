@@ -1,0 +1,35 @@
+# =============================================================================
+# EXPERIMENT (branch experiment/neonplan-ble-proxy): memory diagnostics.
+# -----------------------------------------------------------------------------
+# Test-device only (waveshare-va-ble-test.yaml), not part of the production
+# firmware. Measure the baseline and the Bluetooth build with the same file, so
+# the numbers can be compared. All values refer to internal RAM except PSRAM.
+# =============================================================================
+
+debug:
+  update_interval: 30s
+
+sensor:
+  - platform: debug
+    free:
+      name: "Diag: heap free"
+    block:
+      name: "Diag: heap largest block"
+    min_free:
+      name: "Diag: heap min free"
+    loop_time:
+      name: "Diag: loop time"
+    psram:
+      name: "Diag: PSRAM free"
+  - platform: uptime
+    name: "Diag: uptime"
+    entity_category: diagnostic
+  - platform: wifi_signal
+    name: "Diag: Wi-Fi signal"
+    entity_category: diagnostic
+    update_interval: 30s
+
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: "Diag: reset reason"

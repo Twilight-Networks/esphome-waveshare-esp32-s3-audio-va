@@ -1,0 +1,32 @@
+# =============================================================================
+# EXPERIMENT (branch experiment/neonplan-ble-proxy): test-device config.
+# -----------------------------------------------------------------------------
+# For the separate test device only. Unlike waveshare-va.yaml, which pulls the
+# core from GitHub, this file includes everything from the local working tree,
+# so exactly the checked-out commit is compiled and flashed. Needs a
+# secrets.yaml next to it (copy secrets.example.yaml; kept out of git).
+#
+# `name` must be the test device's current name, otherwise OTA and Home
+# Assistant address a different device.
+#
+#   esphome compile waveshare-va-ble-test.yaml
+#   esphome upload  waveshare-va-ble-test.yaml --device <IP of the test device>
+#
+# Baseline measurement: comment out the `ble_proxy:` line and build again. The
+# firmware is then the production one plus base/diag.yaml.
+# =============================================================================
+
+substitutions:
+  name: waveshare-va-test             # the test device's current name
+  friendly_name: "Waveshare Voice Test"
+
+  # Same values as in waveshare-va.yaml.
+  posix_timezone: "CET-1CEST,M3.5.0,M10.5.0/3"
+  volume_min: '0.4'
+  volume_max: '0.8'
+  hidden_ssid: 'false'
+
+packages:
+  core: !include base/core.yaml
+  diag: !include base/diag.yaml
+  ble_proxy: !include base/ble_proxy.yaml
