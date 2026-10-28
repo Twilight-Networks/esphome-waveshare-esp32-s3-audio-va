@@ -25,3 +25,29 @@ esp32_ble_tracker:
 
 bluetooth_proxy:
   active: false               # advertisements only, no GATT connection slots
+
+# Bluetooth is started by the switch below, never unconditionally at boot: with
+# the switch off, the stack does not come up at all after a restart.
+esp32_ble:
+  enable_on_boot: false
+
+switch:
+  # Turns the proxy on/off from Home Assistant without reflashing; kept across
+  # restarts, on by default. Off tears the Bluetooth stack and controller down
+  # (radio free for Wi-Fi, runtime BLE memory released); the code and fixed
+  # reservations stay in the firmware.
+  - platform: template
+    id: ble_proxy_enabled
+    name: "Bluetooth proxy"
+    icon: mdi:bluetooth
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    # The restore in setup() fires on_turn_on/on_turn_off. A template switch is
+    # set up before esp32_ble (800 vs 350), whose setup() resets the stack to
+    # disabled, so an earlier ble.enable would be lost. 300 = after Bluetooth.
+    setup_priority: 300
+    on_turn_on:
+      - ble.enable
+    on_turn_off:
+      - ble.disable
