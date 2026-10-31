@@ -51,3 +51,6 @@ jobs:
 
       - name: Compile
         run: esphome compile ci/build.yaml
+
+      - name: Compile with Bluetooth proxy
+        run: esphome compile ci/build-ble-proxy.yaml

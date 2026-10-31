@@ -1,0 +1,55 @@
+# =============================================================================
+# Optional package: passive Bluetooth proxy.
+# -----------------------------------------------------------------------------
+# Not built in by default. Enable it by adding `base/ble_proxy.yaml` to the
+# package `files:` list in your config (see waveshare-va.yaml); remove it again
+# to build without Bluetooth. base/core.yaml does not depend on this file.
+#
+# Passive only: no scan requests, no GATT connections. Home Assistant registers
+# the device as a Bluetooth scanner and receives the advertisements with RSSI and
+# timestamp. Bluetooth locating such as NeonPlan 3D reads exactly that through
+# bluetooth.async_current_scanners(); it needs no firmware of its own.
+#
+# The "Bluetooth proxy" switch below turns the proxy off at runtime.
+#
+# Scan timing stays at the ESPHome defaults: interval 320 ms. With Wi-Fi and
+# ESP-IDF >= 5.5.5 the window defaults to the interval, and the coexistence
+# arbiter shares the radio with Wi-Fi.
+#
+# The PSRAM-first Bluedroid options in core.yaml
+# (CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST, CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY)
+# only take effect once this package compiles the Bluetooth stack in.
+# =============================================================================
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: false             # passive scan: no scan requests to the devices
+
+bluetooth_proxy:
+  active: false               # advertisements only, no GATT connection slots
+
+# Bluetooth is started by the switch below, never unconditionally at boot: with
+# the switch off, the stack does not come up at all after a restart.
+esp32_ble:
+  enable_on_boot: false
+
+switch:
+  # Turns the proxy on/off from Home Assistant without reflashing; kept across
+  # restarts, on by default. Off tears the Bluetooth stack and controller down
+  # (radio free for Wi-Fi, runtime BLE memory released); the code and fixed
+  # reservations stay in the firmware.
+  - platform: template
+    id: ble_proxy_enabled
+    name: "Bluetooth proxy"
+    icon: mdi:bluetooth
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    # The restore in setup() fires on_turn_on/on_turn_off. A template switch is
+    # set up before esp32_ble (800 vs 350), whose setup() resets the stack to
+    # disabled, so an earlier ble.enable would be lost. 300 = after Bluetooth.
+    setup_priority: 300
+    on_turn_on:
+      - ble.enable
+    on_turn_off:
+      - ble.disable

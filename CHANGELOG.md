@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Optional passive Bluetooth proxy** (`base/ble_proxy.yaml`): Home Assistant
+  registers the device as a Bluetooth scanner (passive scan, no GATT
+  connections), e.g. for NeonPlan 3D locating. Opt-in: add the file to the
+  package `files:` list. Without it the firmware has no Bluetooth, as before.
+- **"Bluetooth proxy" switch** (config entity, restored, on by default) to turn
+  the proxy off at runtime without reflashing.
+- **Optional diagnostics** (`base/diag.yaml`): internal heap free / minimum /
+  largest block, PSRAM free, loop time, reset reason, Wi-Fi signal, uptime.
+- CI also compiles the core with the Bluetooth proxy (`ci/build-ble-proxy.yaml`).
+
+### Fixed
+- Build on **ESPHome 2026.10**: `play_sound` takes a const `AudioFile*`
+  (port of the upstream v1.2.1 fix). Still builds on 2026.9.
+
 ## [Twilight fork on v1.2.0] - 2026-10-10
 
 Twilight-Networks customizations re-implemented on upstream v1.2.0. Details,

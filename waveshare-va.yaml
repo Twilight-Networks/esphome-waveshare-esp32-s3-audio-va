@@ -47,6 +47,9 @@ packages:
     ref: main     # Twilight fork branch; switch to the final tag/branch once released
     files:
       - base/core.yaml
+      # Optional packages - uncomment to add them to the firmware:
+      # - base/ble_proxy.yaml   # passive Bluetooth proxy + "Bluetooth proxy" switch
+      # - base/diag.yaml        # heap/PSRAM/loop-time diagnostic sensors
     refresh: 1d      # re-check main for updates once a day
 
 # Wi-Fi and the API key come from your local secrets.yaml.

@@ -1,0 +1,36 @@
+# =============================================================================
+# Optional package: memory and loop diagnostics.
+# -----------------------------------------------------------------------------
+# Not built in by default. Enable it by adding `base/diag.yaml` to the package
+# `files:` list in your config (see waveshare-va.yaml). Useful to compare
+# builds, e.g. with and without base/ble_proxy.yaml: build both with this file
+# so the numbers can be compared. All values refer to internal RAM except PSRAM.
+# =============================================================================
+
+debug:
+  update_interval: 30s
+
+sensor:
+  - platform: debug
+    free:
+      name: "Diag: heap free"
+    block:
+      name: "Diag: heap largest block"
+    min_free:
+      name: "Diag: heap min free"
+    loop_time:
+      name: "Diag: loop time"
+    psram:
+      name: "Diag: PSRAM free"
+  - platform: uptime
+    name: "Diag: uptime"
+    entity_category: diagnostic
+  - platform: wifi_signal
+    name: "Diag: Wi-Fi signal"
+    entity_category: diagnostic
+    update_interval: 30s
+
+text_sensor:
+  - platform: debug
+    reset_reason:
+      name: "Diag: reset reason"

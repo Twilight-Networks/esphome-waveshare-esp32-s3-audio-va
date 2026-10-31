@@ -13,7 +13,7 @@ points the `packages:` block at the fork.
 
 | Area | Behavior in this fork |
 |---|---|
-| Package / boot sound | `waveshare-va.yaml` pulls `base/core.yaml` from the Twilight fork (`ref: update/v1.2.0-custom`, switch to the final tag/branch once released). `boot_sound_file` points to `base/sounds/startup.mp3` in the fork. |
+| Package / boot sound | `waveshare-va.yaml` pulls `base/core.yaml` from the Twilight fork (`ref: main`). `boot_sound_file` points to `base/sounds/startup.mp3` in the fork. |
 | Volume buttons | Key 1 = **Volume Down**, key 3 = **Volume Up** (ids `volume_down_button`, `volume_up_button`). Holding a key auto-repeats: first repeat after 400 ms, then every 150 ms. |
 | Play/Pause | Key 2 (`play_pause_button`). Short press = play/pause (fires on **release**). Long press (>= 1.5 s) toggles **Do Not Disturb**. While a timer/alarm is ringing, a press only ends the ringing. |
 | Status ring architecture | `status_ring` holds only the base state from Home Assistant / Node-RED. `status_ring_hw` is the physical WS2812 ring. See section 2. |
@@ -22,6 +22,8 @@ points the `packages:` block at the fork.
 | Do Not Disturb | New switch `do_not_disturb` (restored, default off): hard quiet mode, see section 5. |
 | Ring feedback | Short overlays on the ring: volume (1200 ms, green fast pulse), mic mute (250 ms, solid red), DND on/off acknowledgement (700 ms, 600 ms fade). |
 | Night Mode | Unchanged upstream feature (switch + brightness number). Separate from DND and **lower priority** than DND. |
+| Bluetooth proxy | Optional package `base/ble_proxy.yaml`: passive ESPHome Bluetooth proxy with an on/off switch. Not built in by default. See section 8. |
+| ESPHome 2026.10 | `play_sound` takes a const `AudioFile*` (upstream v1.2.1 fix), so the core builds on 2026.9 and 2026.10. |
 
 ## 2. Architecture decisions
 
@@ -145,3 +147,53 @@ the base architecture and will be optimized separately.
 Other notes: short Play/Pause fires on release (no debounce filter yet; an
 optional `delayed_on_off: 20ms` could be added); the mic-mute flash uses the
 current normal/night ring level.
+
+## 8. Optional Bluetooth proxy (NeonPlan 3D)
+
+`base/ble_proxy.yaml` makes the device a **passive** ESPHome Bluetooth proxy.
+Home Assistant registers it as a Bluetooth scanner and receives the
+advertisements with RSSI and timestamp. NeonPlan 3D locating
+(`bluetooth.async_current_scanners()`) uses exactly that; no custom firmware,
+RSSI entities or ESPresense are needed. IRKs (Apple Watch, iPhone) stay in
+Home Assistant.
+
+Enable it per device by adding the file to the package `files:` list:
+
+```yaml
+packages:
+  core:
+    url: https://github.com/Twilight-Networks/esphome-waveshare-esp32-s3-audio-va
+    ref: main
+    files:
+      - base/core.yaml
+      - base/ble_proxy.yaml
+```
+
+- **Passive only**: no scan requests, no GATT connection slots.
+- **Scan timing**: ESPHome defaults (interval 320 ms; with Wi-Fi and ESP-IDF
+  >= 5.5.5 the window equals the interval, Wi-Fi/BLE coexistence on).
+- **Memory**: the PSRAM-first Bluedroid options already in `core.yaml`
+  (`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`, `CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY`)
+  take effect with this package.
+- **Switch "Bluetooth proxy"** (config entity, restored, default on): off tears
+  the Bluetooth stack and controller down (radio free for Wi-Fi, runtime BLE
+  memory released). `esp32_ble.enable_on_boot` is false, so with the switch off
+  Bluetooth never starts after a restart. The switch uses `setup_priority: 300`
+  so its restore runs after `esp32_ble` has been set up; otherwise the
+  `ble.enable` at boot would be lost.
+- **Partition table unchanged**: OTA works in both directions.
+- **iBeacon Tracker**: Home Assistant may now offer this integration because it
+  receives iBeacon advertisements from nearby devices. The firmware itself does
+  not advertise. The integration is not needed for NeonPlan.
+- **Diagnostics**: `base/diag.yaml` adds heap/PSRAM/loop-time sensors to compare
+  builds with and without the proxy.
+
+Additional tests with the package enabled:
+
+| # | Test | Expected result |
+|---|---|---|
+| 24 | Proxy in Home Assistant | Device listed as passive Bluetooth scanner, advertisements with RSSI |
+| 25 | NeonPlan locating | Scanner listed, readings about once per second |
+| 26 | Switch off / on | Advertisements stop / resume; voice and audio unaffected |
+| 27 | Reboot with switch off | Switch stays off, Bluetooth does not start |
+| 28 | Voice and audio with proxy on | Wake word, TTS, music, DND and timers as in tests 1-23 |
