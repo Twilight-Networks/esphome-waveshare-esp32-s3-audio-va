@@ -1,14 +1,16 @@
 # =============================================================================
-# EXPERIMENT (branch experiment/neonplan-ble-proxy): passive Bluetooth proxy.
+# Optional package: passive Bluetooth proxy.
 # -----------------------------------------------------------------------------
-# Not part of the production firmware. Only ci/build-ble-proxy.yaml and
-# waveshare-va-ble-test.yaml include this file; base/core.yaml is unchanged.
-# Dropping the `ble_proxy:` package line restores the previous firmware.
+# Not built in by default. Enable it by adding `base/ble_proxy.yaml` to the
+# package `files:` list in your config (see waveshare-va.yaml); remove it again
+# to build without Bluetooth. base/core.yaml does not depend on this file.
 #
 # Passive only: no scan requests, no GATT connections. Home Assistant registers
 # the device as a Bluetooth scanner and receives the advertisements with RSSI and
-# timestamp. NeonPlan 3D locating reads exactly that through
+# timestamp. Bluetooth locating such as NeonPlan 3D reads exactly that through
 # bluetooth.async_current_scanners(); it needs no firmware of its own.
+#
+# The "Bluetooth proxy" switch below turns the proxy off at runtime.
 #
 # Scan timing stays at the ESPHome defaults: interval 320 ms. With Wi-Fi and
 # ESP-IDF >= 5.5.5 the window defaults to the interval, and the coexistence
@@ -16,7 +18,7 @@
 #
 # The PSRAM-first Bluedroid options in core.yaml
 # (CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST, CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY)
-# only take effect now that the Bluetooth stack is compiled in.
+# only take effect once this package compiles the Bluetooth stack in.
 # =============================================================================
 
 esp32_ble_tracker:

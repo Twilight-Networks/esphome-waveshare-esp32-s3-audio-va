@@ -1,9 +1,10 @@
 # =============================================================================
-# EXPERIMENT (branch experiment/neonplan-ble-proxy): memory diagnostics.
+# Optional package: memory and loop diagnostics.
 # -----------------------------------------------------------------------------
-# Test-device only (waveshare-va-ble-test.yaml), not part of the production
-# firmware. Measure the baseline and the Bluetooth build with the same file, so
-# the numbers can be compared. All values refer to internal RAM except PSRAM.
+# Not built in by default. Enable it by adding `base/diag.yaml` to the package
+# `files:` list in your config (see waveshare-va.yaml). Useful to compare
+# builds, e.g. with and without base/ble_proxy.yaml: build both with this file
+# so the numbers can be compared. All values refer to internal RAM except PSRAM.
 # =============================================================================
 
 debug:

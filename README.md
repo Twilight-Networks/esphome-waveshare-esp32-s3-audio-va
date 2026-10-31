@@ -10,7 +10,8 @@ core you pull as a package, plus one thin config file you actually edit.
 
 > [!NOTE]
 > **Twilight-Networks fork:** this fork adds Volume Up/Down keys, a Do Not Disturb
-> mode (long-press Play/Pause) and a layered status ring. See
+> mode (long-press Play/Pause), a layered status ring and an optional passive
+> Bluetooth proxy. See
 > [docs/TWILIGHT-CUSTOMIZATIONS.md](docs/TWILIGHT-CUSTOMIZATIONS.md).
 
 > [!TIP]
@@ -134,8 +135,11 @@ waveshare-va.yaml          # YOUR config: copy + edit this (pulls the rest from 
 secrets.example.yaml       # copy to secrets.yaml
 base/
   core.yaml                # the always-on core, pulled as a remote package
+  ble_proxy.yaml           # optional: passive Bluetooth proxy (+ on/off switch)
+  diag.yaml                # optional: heap/PSRAM/loop-time diagnostic sensors
 ci/
   build.yaml               # CI build target: compiles the core from the working tree
+  build-ble-proxy.yaml     # CI build target: core + Bluetooth proxy
 .github/workflows/
   build.yml                # compiles the firmware on every push and pull request
 docs/

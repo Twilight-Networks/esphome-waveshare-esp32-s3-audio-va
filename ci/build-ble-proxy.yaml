@@ -1,6 +1,7 @@
-# EXPERIMENT build target (branch experiment/neonplan-ble-proxy): the same as
-# ci/build.yaml plus the passive Bluetooth proxy. Core and proxy come from the
-# working tree, so the commit under test is what gets compiled.
+# Second CI build target (.github/workflows/build.yml): the same as
+# ci/build.yaml plus the optional Bluetooth proxy (base/ble_proxy.yaml). Core
+# and proxy come from the working tree, so the commit under test is what gets
+# compiled.
 #
 #   cp secrets.example.yaml ci/secrets.yaml
 #   esphome compile ci/build-ble-proxy.yaml
